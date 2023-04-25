@@ -48,7 +48,7 @@ FROM customers
     - AND
     - OR: combine multiple conditions
     - NOT
-        
+      
         ```sql
         WHERE NOT (birth_date >= '1990-01-01' OR points > 1000)
         ```
@@ -343,7 +343,7 @@ JOIN customers c
 ```
 
 - join multiple columns
-    
+  
     ```sql
     USING (customer_id, product_id)
     ```
@@ -1521,7 +1521,7 @@ END
 
 - use parameters to return values to the calling program
 - not very convenient, not recommend unless it is needed to use them
-    
+  
     ```sql
     CREATE DEFINER=`root`@`localhost` PROCEDURE `get_unpaid_invoices_for_client`(
     	client_id INT,
@@ -1874,7 +1874,7 @@ SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 ```
 
 - deadlock: different transactions can not happen
-    
+  
     ```sql
     -- user 1
     USE sql_store;
@@ -1901,7 +1901,7 @@ SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 # Data Types
 
 - **string type**
-    
+  
     Not used in mathematical operations.
     
     `BYTES`: 
@@ -1922,7 +1922,7 @@ SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE;
     - `TEXT`: max 64 KB
 - **numeric type**
     - Integer Types
-        
+      
         Store whole numbers don’t have decimal points.
         
         Use the smallest data type that suits your need ⇒ smaller size database, faster queries
@@ -1940,7 +1940,7 @@ SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE;
         - INT(4) ⇒ 0001
     - Fixed-point and Floating-point types
         - `DECIMAL(p, s)`: fixed point numbers (precision, scale)
-            
+          
             p: maximum number of digits [1, 65]
             
             s: number of digits after the decimal points 
@@ -1953,12 +1953,12 @@ SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE;
     - Booleans types
         - BOOL
         - BOOLEAN
-            
+          
             ```sql
             UPDATE posts
             SET is_published = 1 -- or FALSE
             ```
-            
+        
     - Enums and Set types
         - change the value in Enums can be expensive
         
@@ -1976,7 +1976,7 @@ SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE;
     - `TIMESTAMP` 4b (up to 2038)
     - `YEAR`
 - **blob type**
-    
+  
     store any binary data
     
     Problems with strong files in a database:
@@ -2167,3 +2167,155 @@ Don’t use this in production.
 ALTER TABLE customers
 ENGINE = InnoDB
 ```
+
+# Indexing for High Performance
+
+## indexes
+
+cost of indexes:
+
+- increase the database (permanently stored next to the table)
+- slow down the writes (every time update/ delete the table, index will update corespondingly)
+
+**Should reverse indexes for performance-critical queries! **
+
+**Design indexes based on your queries, not your tables!**
+
+```sql
+EXPLAIN SELECT customer_id 
+FROM customers 
+WHERE state = 'CA';
+
+CREATE INDEX idx_state ON customers (state); # always use a meaningful name
+
+-- write a query to find customers with more than 1000 points
+EXPLAIN SELECT customer_id
+FROM customers
+WHERE points > 1000;
+
+CREATE INDEX idx_points ON customers (points);
+```
+
+## viewing indexes
+
+```sql
+SHOW INDEXES IN customers;
+
+ANALYZE TABLE customers; # give precise results
+```
+
+## Prefix Indexes
+
+- only index the prefix of the string columns, so that the indexes could be smaller
+
+```sql
+	CREATE INDEX idx_lastname ON customers (last_name(20)); # include the first 20 char
+
+# to find the optimial prefix length
+# GOAL: to maximize the number of unique values
+SELECT 
+	COUNT(DISTINCT LEFT(last_name, 1)),
+    COUNT(DISTINCT LEFT(last_name, 5)),
+    COUNT(DISTINCT LEFT(last_name, 10))
+	FROM customers;
+```
+
+## Full-text indexes
+
+- build fast and flexible search engine
+- include the entire string column
+- store a list of words
+
+```sql
+SELECT *
+FROM posts
+WHERE title LIKE '%react redux%' OR
+		body LIKE '%react redux%'; # no index for the column, would getting slower as table growing large
+        
+CREATE FULLTEXT INDEX idx_title_body ON posts (title, body);
+
+SELECT *, MATCH(title, body) AGAINST('react redux') # include a relevent score
+FROM posts
+WHERE MATCH(title, body) AGAINST('react redux');
+
+SELECT *, MATCH(title, body) AGAINST('react redux') # include a relevent score
+FROM posts
+WHERE MATCH(title, body) AGAINST('react -redux +form' IN BOOLEAN MODE);
+```
+
+## Composite Indexes
+
+- can index multiple columns
+- in most of time, we use compositive indexes
+
+```sql
+USE sql_store;
+
+SHOW INDEXES IN CUSTOMERS; # there are three index in the table
+
+
+EXPLAIN SELECT customer_id FROM customers
+WHERE state = 'CA' AND points > 1000; # possible keys are (idx_state, idx_points), but mySql will only use one key
+
+-- composite index
+CREATE INDEX idx_state_points ON customers (state, points);
+-- doing a better job on optimizing a query
+
+DROP INDEX idx_points ON customers;
+```
+
+## Order of Columns in Composite Indexes
+
+1. Put the most frequently used columns first
+2. Put the columns with higher cardinality first 
+3. Take your queries into account
+
+```sql
+USE sql_store;
+
+SELECT
+	COUNT(DISTINCT state),
+    COUNT(DISTINCT last_name)
+FROM customers;
+
+CREATE INDEX idx_lastname_state ON customers
+(last_name, state);
+
+CREATE INDEX idx_state_lastname ON customers
+(state, last_name);
+
+EXPLAIN SELECT customer_id
+FROM customers
+WHERE state = 'CA' AND last_name LIKE 'A%' # '=' is more restricted
+```
+
+## When indexes are ignored
+
+```sql
+	EXPLAIN SELECT customer_id FROM customers
+WHERE state = 'CA' OR points > 1000;
+
+CREATE INDEX idx_points ON customers (points);
+EXPLAIN 
+	SELECT customer_id FROM customers
+	WHERE state = 'CA' 
+    UNION
+    SELECT customer_id FROM customers
+    WHERE points > 1000;
+```
+
+```sql
+EXPLAIN SELECT customer_id FROM customers
+WHERE points + 10 > 2010;
+
+EXPLAIN SELECT customer_id FROM customers
+WHERE points > 2000; -- much more efficient
+```
+
+## Index maintenance
+
+- duplicate indexes
+- redundant indexes
+
+Before creating new indexes, check the existing ones.
+
